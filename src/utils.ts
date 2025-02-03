@@ -40,7 +40,11 @@ import { getIdfTargetFromSdkconfig, getProjectName } from "./workspaceConfig";
 import { OutputChannel } from "./logger/outputChannel";
 import { ESP } from "./config";
 import * as sanitizedHtml from "sanitize-html";
-import { getPythonPath, getVirtualEnvPythonPath } from "./pythonManager";
+import {
+  getEnvVarsFromIdfTools,
+  getPythonPath,
+  getVirtualEnvPythonPath,
+} from "./pythonManager";
 import { IdfToolsManager } from "./idfToolsManager";
 
 const currentFolderMsg = vscode.l10n.t("ESP-IDF: Current Project");
@@ -274,7 +278,6 @@ export async function setCCppPropertiesJsonCompilerPath(
     process.platform === "win32"
       ? "${config:idf.toolsPathWin}"
       : "${config:idf.toolsPath}";
-
   await updateCCppPropertiesJson(
     curWorkspaceFsPath,
     "compilerPath",
@@ -318,10 +321,6 @@ export async function updateCCppPropertiesJson(
     cCppPropertiesJson.configurations &&
     cCppPropertiesJson.configurations.length
   ) {
-    const buildDirPath = idfConf.readParameter(
-      "idf.buildPath",
-      workspaceUri
-    ) as string;
     cCppPropertiesJson.configurations[0][fieldToUpdate] = newFieldValue;
     await writeJSON(cCppPropertiesJsonPath, cCppPropertiesJson, {
       spaces: vscode.workspace.getConfiguration().get("editor.tabSize") || 2,
@@ -1048,25 +1047,6 @@ export async function appendIdfAndToolsToPath(curWorkspace: vscode.Uri) {
     path.join(modifiedEnv.IDF_TOOLS_PATH, "tools"),
     ["cmake", "ninja"]
   );
-  const customExtraVars = idfConf.readParameter(
-    "idf.customExtraVars",
-    curWorkspace
-  ) as { [key: string]: string };
-  if (customExtraVars) {
-    try {
-      for (const envVar in customExtraVars) {
-        if (envVar) {
-          modifiedEnv[envVar] = customExtraVars[envVar];
-        }
-      }
-    } catch (error) {
-      Logger.errorNotify(
-        "Invalid user environment variables format",
-        error,
-        "appendIdfAndToolsToPath idf.customExtraVars"
-      );
-    }
-  }
   const customVars = await idfToolsManager.exportVars(
     path.join(modifiedEnv.IDF_TOOLS_PATH, "tools")
   );
@@ -1110,15 +1090,26 @@ export async function appendIdfAndToolsToPath(curWorkspace: vscode.Uri) {
     );
   }
   const sysPythonPath = await getPythonPath(curWorkspace);
-  const pythonBinPath = await getVirtualEnvPythonPath(curWorkspace);
+  let pythonBinPath = "";
+  if (sysPythonPath) {
+    pythonBinPath = await getVirtualEnvPythonPath(curWorkspace);
+  }
+  if (!pythonBinPath) {
+    pythonBinPath = idfConf.readParameter(
+      "idf.pythonBinPath",
+      curWorkspace
+    ) as string;
+  }
   modifiedEnv.PYTHON =
     pythonBinPath ||
     `${process.env.PYTHON}` ||
     `${path.join(process.env.IDF_PYTHON_ENV_PATH, "bin", "python")}`;
 
-  modifiedEnv.IDF_PYTHON_ENV_PATH =
-    path.dirname(path.dirname(pythonBinPath)) ||
-    process.env.IDF_PYTHON_ENV_PATH;
+  const pythonBinPathExists = await pathExists(pythonBinPath);
+
+  modifiedEnv.IDF_PYTHON_ENV_PATH = pythonBinPathExists
+    ? path.dirname(path.dirname(pythonBinPath))
+    : process.env.IDF_PYTHON_ENV_PATH;
 
   const gitPath = idfConf.readParameter("idf.gitPath", curWorkspace) as string;
   let pathToGitDir;
@@ -1140,6 +1131,58 @@ export async function appendIdfAndToolsToPath(curWorkspace: vscode.Uri) {
   let pathNameInEnv: string = Object.keys(process.env).find(
     (k) => k.toUpperCase() == "PATH"
   );
+
+  const idfPathExists = await pathExists(modifiedEnv.IDF_PATH);
+  const idfToolsPathExists = await pathExists(modifiedEnv.IDF_TOOLS_PATH);
+
+  if (pythonBinPathExists && idfPathExists && idfToolsPathExists) {
+    const idfToolsExportVars = await getEnvVarsFromIdfTools(
+      modifiedEnv.IDF_PATH,
+      modifiedEnv.IDF_TOOLS_PATH,
+      pythonBinPath
+    );
+
+    if (idfToolsExportVars) {
+      try {
+        for (const envVar in idfToolsExportVars) {
+          if (envVar.toUpperCase() === pathNameInEnv.toUpperCase()) {
+            modifiedEnv[pathNameInEnv] = idfToolsExportVars[envVar]
+              .replace("%PATH%", modifiedEnv[pathNameInEnv])
+              .replace("$PATH", modifiedEnv[pathNameInEnv]);
+          } else {
+            modifiedEnv[envVar] = idfToolsExportVars[envVar];
+          }
+        }
+      } catch (error) {
+        Logger.errorNotify(
+          "Invalid ESP-IDF idf_tools.py export environment variables format",
+          error,
+          "appendIdfAndToolsToPath idf_tools export env vars"
+        );
+      }
+    }
+  }
+
+  const customExtraVars = idfConf.readParameter(
+    "idf.customExtraVars",
+    curWorkspace
+  ) as { [key: string]: string };
+  if (customExtraVars) {
+    try {
+      for (const envVar in customExtraVars) {
+        if (envVar) {
+          modifiedEnv[envVar] = customExtraVars[envVar];
+        }
+      }
+    } catch (error) {
+      Logger.errorNotify(
+        "Invalid user environment variables format",
+        error,
+        "appendIdfAndToolsToPath idf.customExtraVars"
+      );
+    }
+  }
+
   if (pathToGitDir) {
     modifiedEnv[pathNameInEnv] =
       pathToGitDir + path.delimiter + modifiedEnv[pathNameInEnv];
@@ -1148,27 +1191,48 @@ export async function appendIdfAndToolsToPath(curWorkspace: vscode.Uri) {
     modifiedEnv[pathNameInEnv] =
       pathToPigweed + path.delimiter + modifiedEnv[pathNameInEnv];
   }
-  modifiedEnv[pathNameInEnv] =
-    path.dirname(modifiedEnv.PYTHON) +
-    path.delimiter +
-    path.join(modifiedEnv.IDF_PATH, "tools") +
-    path.delimiter +
-    modifiedEnv[pathNameInEnv];
 
   if (
     modifiedEnv[pathNameInEnv] &&
-    !modifiedEnv[pathNameInEnv].includes(extraPaths)
+    !modifiedEnv[pathNameInEnv].includes(path.dirname(modifiedEnv.PYTHON))
   ) {
     modifiedEnv[pathNameInEnv] =
-      extraPaths + path.delimiter + modifiedEnv[pathNameInEnv];
+      path.dirname(modifiedEnv.PYTHON) +
+      path.delimiter +
+      modifiedEnv[pathNameInEnv];
   }
+
+  if (
+    modifiedEnv[pathNameInEnv] &&
+    !modifiedEnv[pathNameInEnv].includes(
+      path.join(modifiedEnv.IDF_PATH, "tools")
+    )
+  ) {
+    modifiedEnv[pathNameInEnv] =
+      path.join(modifiedEnv.IDF_PATH, "tools") +
+      path.delimiter +
+      modifiedEnv[pathNameInEnv];
+  }
+
+  const extraPathsArray = extraPaths.split(path.delimiter);
+  for (let extraPath of extraPathsArray) {
+    if (
+      modifiedEnv[pathNameInEnv] &&
+      !modifiedEnv[pathNameInEnv].includes(extraPath)
+    ) {
+      modifiedEnv[pathNameInEnv] =
+        extraPath + path.delimiter + modifiedEnv[pathNameInEnv];
+    }
+  }
+
   modifiedEnv[
     pathNameInEnv
   ] = `${IDF_ADD_PATHS_EXTRAS}${path.delimiter}${modifiedEnv[pathNameInEnv]}`;
 
   let idfTarget = await getIdfTargetFromSdkconfig(curWorkspace);
   if (idfTarget) {
-    modifiedEnv.IDF_TARGET = idfTarget || process.env.IDF_TARGET;
+    modifiedEnv.IDF_TARGET =
+      modifiedEnv.IDF_TARGET || idfTarget || process.env.IDF_TARGET;
   }
 
   let enableComponentManager = idfConf.readParameter(
@@ -1234,9 +1298,10 @@ export async function startPythonReqsProcess(
     "tools",
     "check_python_dependencies.py"
   );
-  const modifiedEnv = await appendIdfAndToolsToPath(
-    extensionContext.extensionUri
+  const modifiedEnv: { [key: string]: string } = <{ [key: string]: string }>(
+    Object.assign({}, process.env)
   );
+  modifiedEnv.IDF_PATH = espIdfPath;
   return execChildProcess(
     pythonBinPath,
     [reqFilePath, "-r", requirementsPath],

@@ -66,6 +66,17 @@ export async function setIdfTarget(
         if (!selectedTarget) {
           return;
         }
+        const customExtraVars = readParameter(
+          "idf.customExtraVars",
+          workspaceFolder
+        ) as { [key: string]: string };
+        customExtraVars["IDF_TARGET"] = selectedTarget.target;
+        await writeParameter(
+          "idf.customExtraVars",
+          customExtraVars,
+          configurationTarget,
+          workspaceFolder.uri
+        );
         const openOcdScriptsPath = await getOpenOcdScripts(workspaceFolder.uri);
         const boards = await getBoards(
           openOcdScriptsPath,
@@ -88,7 +99,7 @@ export async function setIdfTarget(
         } else if (selectedBoard && selectedBoard.target) {
           if (selectedBoard.label.indexOf("Custom board") !== -1) {
             const inputBoard = await window.showInputBox({
-              placeHolder: "Enter comma separated configuration files",
+              placeHolder: "Enter comma-separated configuration files",
               value: selectedBoard.target.join(","),
             });
             if (inputBoard) {

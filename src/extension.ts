@@ -107,7 +107,6 @@ import {
   isFlashEncryptionEnabled,
   FlashCheckResultType,
   checkFlashEncryption,
-  isJtagDisabled,
 } from "./flash/verifyFlashEncryption";
 import { flashCommand } from "./flash/uartFlash";
 import { jtagFlashCommand } from "./flash/jtagCmd";
@@ -508,6 +507,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(sdkWatchDisposable);
   const sdkDeleteWatchDisposable = sdkconfigWatcher.onDidDelete(async () => {
     ConfserverProcess.dispose();
+    await getIdfTargetFromSdkconfig(workspaceRoot, statusBarItems["target"]);
   });
   context.subscriptions.push(sdkDeleteWatchDisposable);
 
@@ -1234,6 +1234,8 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     } else if (e.affectsConfiguration("idf.buildPath")) {
       updateIdfComponentsTree(workspaceRoot);
+    } else if (e.affectsConfiguration("idf.customExtraVars")) {
+      await getIdfTargetFromSdkconfig(workspaceRoot, statusBarItems["target"]);
     }
   });
 
@@ -1509,7 +1511,7 @@ export async function activate(context: vscode.ExtensionContext) {
             const pyPath = await getVirtualEnvPythonPath(workspaceRoot);
             progress.report({
               message: vscode.l10n.t(
-                `Installing ESP-IDF extension Python Requirements...`
+                `Installing ESP-IDF extension Python requirements...`
               ),
             });
             await installExtensionPyReqs(
@@ -1789,7 +1791,9 @@ export async function activate(context: vscode.ExtensionContext) {
     });
   });
 
-  registerIDFCommand("espIdf.createIdfTerminal", createIdfTerminal);
+  registerIDFCommand("espIdf.createIdfTerminal", () =>
+    createIdfTerminal(context.extensionPath)
+  );
   registerIDFCommand("espIdf.jtag_flash", () =>
     flash(false, ESP.FlashType.JTAG)
   );
@@ -2150,6 +2154,10 @@ export async function activate(context: vscode.ExtensionContext) {
     return context.extensionPath;
   });
 
+  registerIDFCommand("espIdf.getIDFTarget", async () => {
+    return await getIdfTargetFromSdkconfig(workspaceRoot);
+  });
+
   registerIDFCommand("espIdf.getOpenOcdConfigs", () => {
     const openOcfConfigs = idfConf.readParameter(
       "idf.openOcdConfigs",
@@ -2191,7 +2199,7 @@ export async function activate(context: vscode.ExtensionContext) {
       if (selectedBoard.target.name.indexOf("Custom board") !== -1) {
         const inputBoard = await vscode.window.showInputBox({
           placeHolder: vscode.l10n.t(
-            "Enter comma separated configuration files"
+            "Enter comma-separated configuration files"
           ),
           value: selectedBoard.target.configFiles.join(","),
         });
@@ -2374,7 +2382,7 @@ export async function activate(context: vscode.ExtensionContext) {
     await utils.copyFromSrcProject(srcFolder[0].fsPath, destFolder);
     await utils.updateProjectNameInCMakeLists(destFolder.fsPath, projectName);
     const opt = await vscode.window.showInformationMessage(
-      vscode.l10n.t("ESP-IDF Project has been imported"),
+      vscode.l10n.t("ESP-IDF project has been imported"),
       "Open"
     );
     if (opt === "Open") {
@@ -3630,11 +3638,36 @@ export async function activate(context: vscode.ExtensionContext) {
       Logger.warn(`Failed to handle URI Open, ${uri.toString()}`);
     },
   });
-  await checkExtensionSettings(
-    context.extensionPath,
-    workspaceRoot,
-    statusBarItems["currentIdfVersion"]
+  checkExtensionSettings(workspaceRoot, statusBarItems["currentIdfVersion"]);
+
+  // WALK-THROUGH
+  let disposable = vscode.commands.registerCommand(
+    "espIdf.openWalkthrough",
+    () => {
+      vscode.commands.executeCommand(
+        "workbench.action.openWalkthrough",
+        "espressif.esp-idf-extension#espIdf.walkthrough.basic-usage"
+      );
+    }
   );
+
+  context.subscriptions.push(disposable);
+
+  const hasWalkthroughBeenShown = await idfConf.readParameter(
+    "idf.hasWalkthroughBeenShown"
+  );
+
+  if (!hasWalkthroughBeenShown) {
+    await idfConf.writeParameter(
+      "idf.hasWalkthroughBeenShown",
+      true,
+      vscode.ConfigurationTarget.Global
+    );
+    vscode.commands.executeCommand(
+      "workbench.action.openWalkthrough",
+      "espressif.esp-idf-extension#espIdf.walkthrough.basic-usage"
+    );
+  }
 
   // Hints Viewer
 
@@ -4053,7 +4086,7 @@ function createQemuMonitor() {
 }
 
 const buildFlashAndMonitor = async (runMonitor: boolean = true) => {
-  PreCheck.perform([webIdeCheck, openFolderCheck], async () => {
+  PreCheck.perform([openFolderCheck], async () => {
     const notificationMode = idfConf.readParameter(
       "idf.notificationMode",
       workspaceRoot
@@ -4082,6 +4115,11 @@ const buildFlashAndMonitor = async (runMonitor: boolean = true) => {
           flashType
         );
         if (!canContinue) {
+          return;
+        }
+        // Re route to ESP-IDF Web extension if using Codespaces or Browser
+        if (vscode.env.uiKind === vscode.UIKind.Web) {
+          vscode.commands.executeCommand(IDFWebCommandKeys.FlashAndMonitor);
           return;
         }
         progress.report({
@@ -4182,26 +4220,6 @@ async function startFlashing(
   }
 
   if (flashType === ESP.FlashType.JTAG) {
-    // Check if JTAG is disabled on the hardware
-    const eFuse = new ESPEFuseManager(workspaceRoot);
-    const eFuseSummary = await eFuse.readSummary();
-    const jtagStatus = isJtagDisabled(eFuseSummary);
-    if (jtagStatus.disabled) {
-      Logger.errorNotify(
-        vscode.l10n.t("Cannot flash via JTAG method: {0}", jtagStatus.message),
-        new Error("JTAG Disabled"),
-        "extension startFlashing"
-      );
-      return;
-    } else if (jtagStatus.requiresVerification) {
-      const message = vscode.l10n.t(
-        "{0}\n\nThe JTAG configuration may depend on hardware strapping. Please consult the ESP32 technical documentation for your specific model to ensure proper JTAG configuration before proceeding.",
-        jtagStatus.message
-      );
-      Logger.warnNotify(message);
-      return;
-    }
-
     const currOpenOcdVersion = await openOCDManager.version();
     const openOCDVersionIsValid = PreCheck.openOCDVersionValidator(
       "v0.10.0-esp32-20201125",
@@ -4231,17 +4249,36 @@ async function startFlashing(
   }
 }
 
-function createIdfTerminal() {
+function createIdfTerminal(extensionPath: string) {
   PreCheck.perform([openFolderCheck], async () => {
     const modifiedEnv = await utils.appendIdfAndToolsToPath(workspaceRoot);
+    let shellArgs = [];
+    if (process.platform === "win32") {
+      if (
+        vscode.env.shell.indexOf("powershell") !== -1 ||
+        vscode.env.shell.indexOf("pwsh") !== -1
+      ) {
+        shellArgs = ["-ExecutionPolicy", "Bypass"];
+      }
+    }
     const espIdfTerminal = vscode.window.createTerminal({
       name: "ESP-IDF Terminal",
       env: modifiedEnv,
       cwd: workspaceRoot.fsPath || modifiedEnv.IDF_PATH || process.cwd(),
       strictEnv: true,
-      shellArgs: [],
+      shellArgs,
       shellPath: vscode.env.shell,
     });
+    if (process.platform === "win32") {
+      if (vscode.env.shell.indexOf("cmd.exe") !== -1) {
+        espIdfTerminal.sendText(path.join(extensionPath, "export.bat"));
+      } else if (
+        vscode.env.shell.indexOf("powershell") !== -1 ||
+        vscode.env.shell.indexOf("pwsh") !== -1
+      ) {
+        espIdfTerminal.sendText(path.join(extensionPath, "export.ps1"));
+      }
+    }
     espIdfTerminal.show();
   });
 }

@@ -27,7 +27,8 @@ export interface IDFCommandDescription {
 
 export enum IDFWebCommandKeys {
   Flash = "espIdfWeb.flash",
-  Monitor = "espIdfWeb.monitor"
+  Monitor = "espIdfWeb.monitor",
+  FlashAndMonitor = "espIdfWeb.flashAndMonitor"
 }
 
 export enum CommandKeys {
@@ -238,7 +239,7 @@ export function createCommandDictionary(): Record<
         TreeItemCheckboxState.Checked
       ),
       iconId: "chip",
-      tooltip: l10n.t("Set Espressif Device Target (IDF_TARGET"),
+      tooltip: l10n.t("Set Espressif Device Target (IDF_TARGET)"),
     },
     [CommandKeys.SDKConfig]: {
       checkboxState: ESP.GlobalConfiguration.store.get<TreeItemCheckboxState>(
