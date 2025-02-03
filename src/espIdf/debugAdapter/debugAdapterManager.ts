@@ -162,6 +162,20 @@ export class DebugAdapterManager extends EventEmitter {
       if (this.isPostMortemDebugMode) {
         adapterArgs.push("-pm");
       }
+      const adapterProcess = spawn("adapterExecutable", adapterArgs, {
+        env: this.env,
+        cwd: this.currentWorkspace.fsPath,
+      });
+      adapterProcess.on("error", (err) => {
+        reject(err);
+      });
+      adapterProcess.on("exit", (code) => {
+        if (code !== 0) {
+          reject(new Error(`Adapter process exited with code ${code}`));
+        } else {
+          resolve();
+        }
+      });
       this.adapter = spawn(this.debugAdapterPath, adapterArgs, { env: this.env });
       if (this.coreDumpFile) {
         adapterArgs.push("-c", this.coreDumpFile);
