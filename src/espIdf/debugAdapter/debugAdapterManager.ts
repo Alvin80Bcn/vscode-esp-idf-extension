@@ -157,7 +157,7 @@ export class DebugAdapterManager extends EventEmitter {
         "-a",
         this.appOffset,
         "-t",
-        toolchainPrefix,
+        ...toolchainPrefix,
       ];
       if (this.isPostMortemDebugMode) {
         adapterArgs.push("-pm");
