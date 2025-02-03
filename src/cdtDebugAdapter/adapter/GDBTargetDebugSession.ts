@@ -22,6 +22,7 @@ import { spawn, ChildProcess } from "child_process";
 import { SerialPort, ReadlineParser } from "serialport";
 import { Socket } from "net";
 import { createEnvValues, getGdbCwd } from "./util";
+import * as _ from "lodash";
 
 interface UARTArguments {
   // Path to the serial port connected to the UART on the board.
@@ -256,7 +257,7 @@ export class GDBTargetDebugSession extends GDBDebugSession {
         checkTargetPort = (data: any) => {
           const regex = new RegExp(
             target.serverPortRegExp
-              ? target.serverPortRegExp
+              ? _.escapeRegExp(target.serverPortRegExp)
               : "Listening on port ([0-9]+)\r?\n"
           );
           const m = regex.exec(data);
