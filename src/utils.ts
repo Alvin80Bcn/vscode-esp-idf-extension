@@ -347,18 +347,18 @@ export async function getToolchainPath(
   }
 }
 
-export function getToolchainToolName(idfTarget: string, tool: string = "gcc") {
+export function getToolchainToolName(idfTarget: string, tool: string = "gcc"): string[] {
   switch (idfTarget) {
     case "esp32":
     case "esp32s2":
     case "esp32s3":
-      return `xtensa-${idfTarget}-elf-${tool}`;
+      return ["xtensa-" + idfTarget + "-elf-" + tool];
     case "esp32c2":
     case "esp32c3":
     case "esp32c6":
     case "esp32h2":
     default:
-      return `riscv32-esp-elf-${tool}`;
+      return ["riscv32-esp-elf-" + tool];
   }
 }
 
