@@ -238,8 +238,8 @@ export function replaceUserPath(report: reportObj): reportObj {
   let re = new RegExp(_.escapeRegExp(process.env.HOME), "g");
   if (process.env.windir) {
     const reWin = new RegExp("\\\\", "g");
-    const result = process.env.HOMEPATH.replace(reWin, "\\\\\\\\");
-    re = new RegExp(result, "g");
+    const escapedHomePath = _.escapeRegExp(process.env.HOMEPATH.replace(reWin, "\\\\\\\\"));
+    re = new RegExp(escapedHomePath, "g");
   }
   const parsedReport = strReport.replace(re, "<HOMEPATH>");
 
