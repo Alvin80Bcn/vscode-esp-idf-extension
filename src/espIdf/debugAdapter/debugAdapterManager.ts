@@ -144,7 +144,6 @@ export class DebugAdapterManager extends EventEmitter {
 
       const toolchainPrefix = getToolchainToolName(this.target, "");
       const adapterArgs = [
-        this.debugAdapterPath,
         "-d",
         this.logLevel.toString(),
         "-e",
@@ -163,6 +162,7 @@ export class DebugAdapterManager extends EventEmitter {
       if (this.isPostMortemDebugMode) {
         adapterArgs.push("-pm");
       }
+      this.adapter = spawn(this.debugAdapterPath, adapterArgs, { env: this.env });
       if (this.coreDumpFile) {
         adapterArgs.push("-c", this.coreDumpFile);
       }
